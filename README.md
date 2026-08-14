@@ -19,6 +19,18 @@ Copy-Item .env.example .env
 python -m uvicorn app.main:app --reload
 ```
 
+Hoặc khởi động bằng launcher:
+
+```powershell
+.\start.ps1
+```
+
+Trên Git Bash, WSL, Linux hoặc macOS:
+
+```bash
+./start.sh
+```
+
 Mặc định dùng hashing backend để chạy tức thì, offline và thuận tiện quan sát pipeline:
 
 ```dotenv
