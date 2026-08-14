@@ -63,7 +63,7 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 
-# Scrapy stuff:
+# Scrapy
 .scrapy
 
 # Sphinx documentation
@@ -88,41 +88,27 @@ Pipfile.lock
 # PEP 582
 __pypackages__/
 
-# Celery stuff
+# Celery
 celerybeat-schedule
 celerybeat.pid
 
-# SageMath parsed files
+# SageMath
 *.sage.py
 
 # Environments
 .env
 .venv
+.venv/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 
-# Spyder project settings
+# IDE and editor files
 .spyderproject
 .spyproject
-
-# Rope project settings
 .ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# IDE
 .vscode/
 .idea/
 *.swp
@@ -130,12 +116,23 @@ dmypy.json
 *~
 .DS_Store
 
-# Data files (optional - uncomment if needed)
+# Documentation build
+/site
+
+# Type checker caches
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# Data files
 # data/
 *.pkl
 *.pickle
 *.npy
 *.npz
+data/uploads/
+data/vector_db/
 
 # Vector database files
 *.faiss

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f766e" />
+    <meta name="description" content="Trợ lý hỏi đáp thông minh trên tài liệu của bạn" />
+    <title>RAGmate — Trò chuyện với tài liệu</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="Kho tài liệu">
+        <div class="brand-row">
+          <a class="brand" href="/" aria-label="RAGmate trang chủ">
+            <span class="brand-mark">R</span>
+            <span><strong>RAGmate</strong><small>Knowledge assistant</small></span>
+          </a>
+          <button class="icon-button mobile-only" id="closeSidebar" aria-label="Đóng kho tài liệu">×</button>
+        </div>
+
+        <section class="upload-section" aria-labelledby="uploadTitle">
+          <div class="section-heading">
+            <div><span class="eyebrow">Kho kiến thức</span><h2 id="uploadTitle">Tài liệu của bạn</h2></div>
+            <span class="count-badge" id="fileCount">0</span>
+          </div>
+
+          <label class="drop-zone" id="dropZone" for="fileInput">
+            <input id="fileInput" type="file" accept=".txt,.pdf,.docx" hidden />
+            <span class="upload-symbol" aria-hidden="true">↑</span>
+            <strong>Thả tài liệu vào đây</strong>
+            <span>hoặc bấm để chọn tệp</span>
+            <small>PDF, DOCX hoặc TXT · tối đa 50 MB</small>
+          </label>
+
+          <div class="upload-progress hidden" id="uploadProgress" role="status">
+            <span class="spinner"></span>
+            <div><strong>Đang đọc tài liệu…</strong><small>Chia đoạn và tạo embedding</small></div>
+          </div>
+        </section>
+
+        <section class="document-section">
+          <div class="document-list" id="documentList">
+            <div class="empty-docs"><span>⌁</span><p>Chưa có tài liệu</p><small>Upload tệp đầu tiên để bắt đầu</small></div>
+          </div>
+        </section>
+
+        <div class="sidebar-footer">
+          <div class="storage-summary">
+            <div><span>Đoạn dữ liệu</span><strong id="chunkCount">0</strong></div>
+            <div><span>Vector</span><strong id="embeddingDim">—</strong></div>
+          </div>
+          <div class="footer-actions">
+            <a href="/api/docs" target="_blank" rel="noreferrer">API Docs ↗</a>
+            <button class="danger-link" id="clearDatabase">Xóa kho dữ liệu</button>
+          </div>
+        </div>
+      </aside>
+
+      <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+      <main class="chat-area">
+        <header class="topbar">
+          <button class="icon-button mobile-only" id="openSidebar" aria-label="Mở kho tài liệu">☰</button>
+          <div class="assistant-identity">
+            <span class="assistant-avatar">R</span>
+            <div><strong>Trợ lý tài liệu</strong><span class="status-line"><i id="statusDot"></i><span id="statusText">Đang kết nối…</span></span></div>
+          </div>
+          <div class="topbar-actions">
+            <div class="mode-switch" role="group" aria-label="Chế độ trả lời">
+              <button class="active" data-mode="ask">Trả lời</button>
+              <button data-mode="search">Tìm đoạn</button>
+            </div>
+            <button class="icon-button panel-toggle" id="toggleSources" aria-label="Mở nguồn tham chiếu" title="Nguồn tham chiếu">⌕</button>
+            <button class="icon-button" id="newChat" aria-label="Bắt đầu cuộc trò chuyện mới" title="Cuộc trò chuyện mới">＋</button>
+          </div>
+        </header>
+
+        <section class="messages" id="messages" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <div class="welcome-orbit"><span>R</span></div>
+            <span class="eyebrow">Sẵn sàng đồng hành</span>
+            <h1>Hỏi điều gì từ<br />tài liệu của bạn?</h1>
+            <p>Mình đọc, truy xuất và trả lời dựa trên đúng nội dung bạn đã tải lên — luôn kèm nguồn để kiểm chứng.</p>
+            <div class="suggestion-grid" id="suggestions">
+              <button data-question="Tóm tắt những ý chính trong tài liệu."><span>✦</span><strong>Tóm tắt nội dung</strong><small>Nắm nhanh các ý quan trọng</small></button>
+              <button data-question="Liệt kê các khái niệm quan trọng được nhắc đến."><span>◎</span><strong>Khái niệm chính</strong><small>Khám phá thuật ngữ nổi bật</small></button>
+              <button data-question="Tài liệu đưa ra những kết luận nào?"><span>↗</span><strong>Tìm kết luận</strong><small>Truy xuất luận điểm cuối cùng</small></button>
+            </div>
+          </div>
+        </section>
+
+        <div class="composer-wrap">
+          <form class="composer" id="chatForm">
+            <textarea id="questionInput" rows="1" maxlength="10000" placeholder="Hỏi về tài liệu của bạn…" aria-label="Câu hỏi"></textarea>
+            <div class="composer-footer">
+              <span class="mode-hint" id="modeHint"><i>✦</i> Trả lời có dẫn nguồn</span>
+              <button class="send-button" id="sendButton" type="submit" disabled aria-label="Gửi câu hỏi">➤</button>
+            </div>
+          </form>
+          <p class="disclaimer">RAGmate có thể chưa chính xác. Hãy kiểm tra lại nguồn trích dẫn.</p>
+        </div>
+      </main>
+
+      <aside class="sources-panel" id="sourcesPanel" aria-label="Nguồn tham chiếu">
+        <div class="sources-header">
+          <div><span class="eyebrow">Minh bạch</span><h2>Nguồn tham chiếu</h2></div>
+          <div class="sources-heading-actions"><span class="count-badge" id="sourceCount">0</span><button class="icon-button panel-close" id="closeSources" aria-label="Đóng nguồn tham chiếu">×</button></div>
+        </div>
+        <div class="source-content" id="sourceContent">
+          <div class="source-empty"><span>⌕</span><h3>Chưa có nguồn</h3><p>Các đoạn tài liệu liên quan sẽ xuất hiện ở đây sau khi bạn đặt câu hỏi.</p></div>
+        </div>
+        <div class="retrieval-note">
+          <span>i</span>
+          <p><strong>Cách hoạt động</strong>Hệ thống so khớp câu hỏi với các đoạn tài liệu bằng vector embedding.</p>
+        </div>
+      </aside>
+    </div>
+
+    <div class="toast-region" id="toastRegion" aria-live="assertive"></div>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

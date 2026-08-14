@@ -51,7 +51,7 @@ class SearchQuery(BaseModel):
         default=None,
         title="Similarity Threshold",
         description="Minimum similarity threshold (0-1)",
-        ge=0.0,
+        ge=-1.0,
         le=1.0
     )
 

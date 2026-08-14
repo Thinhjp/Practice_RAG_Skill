@@ -1,213 +1,168 @@
-"""
-=============================================================================
-MODULE: VECTOR_DB.PY
-Purpose: Store and manage the vector database (embeddings + metadata)
-=============================================================================
+"""A small persistent NumPy vector store for learning RAG mechanics."""
 
-INSTRUCTIONS:
-1. Create the function load_vector_db() to load the database from disk
-2. Create the function save_vector_db() to save the database to disk
-3. Create the function add_to_vector_db() to add new chunks to the database
-4. Create the function get_vector_db_stats() to retrieve database statistics
-"""
-
-from typing import List, Dict, Tuple
-import numpy as np
 import json
 import os
+import threading
+from collections import Counter
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from uuid import uuid4
+
+import numpy as np
 
 from app.config import config
 
 
-# ============================================================================
-# INITIALIZE AND MANAGE VECTOR DATABASE
-# ============================================================================
+_DB_LOCK = threading.RLock()
+
+
+def _paths(db_path: str | None = None) -> tuple[Path, Path, Path]:
+    directory = Path(db_path or config.VECTOR_DB_PATH)
+    return directory, directory / config.VECTOR_DB_FILE, directory / config.METADATA_FILE
+
+
+def _validate(vectors: Optional[np.ndarray], metadata: List[Dict]) -> None:
+    if vectors is None:
+        if metadata:
+            raise ValueError("Metadata exists without vectors")
+        return
+    if vectors.ndim != 2:
+        raise ValueError("Vectors must be a two-dimensional matrix")
+    if len(vectors) != len(metadata):
+        raise ValueError("Vector and metadata counts do not match")
+    if not np.isfinite(vectors).all():
+        raise ValueError("Vectors contain non-finite values")
+
+
+def load_vector_db(db_path: str | None = None) -> Tuple[Optional[np.ndarray], List[Dict]]:
+    directory, vectors_path, metadata_path = _paths(db_path)
+    if not directory.exists() or (not vectors_path.exists() and not metadata_path.exists()):
+        return None, []
+    if not vectors_path.exists() or not metadata_path.exists():
+        raise RuntimeError("Vector database is incomplete")
+
+    with _DB_LOCK:
+        try:
+            vectors = np.load(vectors_path, allow_pickle=False).astype(np.float32, copy=False)
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"Cannot load vector database: {exc}") from exc
+    if not isinstance(metadata, list):
+        raise RuntimeError("Metadata file must contain a JSON list")
+    _validate(vectors, metadata)
+    return vectors, metadata
+
+
+def save_vector_db(
+    vectors: np.ndarray, metadata: List[Dict], db_path: str | None = None
+) -> bool:
+    matrix = np.asarray(vectors, dtype=np.float32)
+    _validate(matrix, metadata)
+    directory, vectors_path, metadata_path = _paths(db_path)
+    directory.mkdir(parents=True, exist_ok=True)
+    token = uuid4().hex
+    vectors_temp = directory / f".{config.VECTOR_DB_FILE}.{token}.tmp"
+    metadata_temp = directory / f".{config.METADATA_FILE}.{token}.tmp"
+
+    with _DB_LOCK:
+        try:
+            with vectors_temp.open("wb") as output:
+                np.save(output, matrix, allow_pickle=False)
+                output.flush()
+                os.fsync(output.fileno())
+            metadata_temp.write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            os.replace(vectors_temp, vectors_path)
+            os.replace(metadata_temp, metadata_path)
+        finally:
+            vectors_temp.unlink(missing_ok=True)
+            metadata_temp.unlink(missing_ok=True)
+    return True
+
+
+def add_to_vector_db(
+    chunks: List[Dict],
+    vectors: Optional[np.ndarray] = None,
+    metadata: Optional[List[Dict]] = None,
+) -> Tuple[Optional[np.ndarray], List[Dict]]:
+    current_metadata = list(metadata or [])
+    if not chunks:
+        _validate(vectors, current_metadata)
+        return vectors, current_metadata
+
+    try:
+        new_vectors = np.vstack(
+            [np.asarray(chunk["embedding"], dtype=np.float32).reshape(1, -1) for chunk in chunks]
+        )
+    except KeyError as exc:
+        raise ValueError("Every chunk must have an embedding") from exc
+
+    new_metadata = [
+        {key: value for key, value in chunk.items() if key != "embedding"}
+        for chunk in chunks
+    ]
+    if vectors is None:
+        updated_vectors = new_vectors
+    else:
+        current = np.asarray(vectors, dtype=np.float32)
+        if current.ndim != 2 or current.shape[1] != new_vectors.shape[1]:
+            raise ValueError("New embeddings have a different dimension")
+        updated_vectors = np.vstack([current, new_vectors])
+    updated_metadata = [*current_metadata, *new_metadata]
+    _validate(updated_vectors, updated_metadata)
+    return updated_vectors, updated_metadata
+
+
+def append_chunks(chunks: List[Dict], db_path: str | None = None) -> Tuple[np.ndarray, List[Dict]]:
+    """Atomically load, append, and persist chunks for concurrent upload requests."""
+    with _DB_LOCK:
+        vectors, metadata = load_vector_db(db_path)
+        updated_vectors, updated_metadata = add_to_vector_db(chunks, vectors, metadata)
+        if updated_vectors is None:
+            raise ValueError("No chunks were supplied")
+        save_vector_db(updated_vectors, updated_metadata, db_path)
+        return updated_vectors, updated_metadata
+
+
+def get_vector_db_stats(
+    vectors: Optional[np.ndarray] = None, metadata: Optional[List[Dict]] = None
+) -> Dict:
+    if vectors is None and metadata is None:
+        vectors, metadata = load_vector_db()
+    items = list(metadata or [])
+    if vectors is None:
+        vectors = np.empty((0, 0), dtype=np.float32)
+    _validate(vectors, items)
+    counts = Counter(item.get("file_name", "unknown") for item in items)
+    return {
+        "total_chunks": len(items),
+        "embedding_dim": int(vectors.shape[1]) if vectors.size else 0,
+        "vector_shape": list(vectors.shape),
+        "unique_files": len(counts),
+        "files": [
+            {"file_name": name, "chunk_count": count}
+            for name, count in sorted(counts.items())
+        ],
+    }
+
 
 class VectorDB:
-    """
-    TODO: Create the VectorDB class to manage embedding vectors and metadata
+    """Object-oriented facade over the functional persistence API."""
 
-    Attributes:
-        vectors (np.ndarray): Matrix containing all embeddings (n_chunks x embedding_dim)
-        metadata (List[Dict]): List of metadata corresponding to vectors
+    def __init__(self, db_path: str | None = None):
+        self.db_path = db_path
+        self.vectors, self.metadata = load_vector_db(db_path)
 
-    Suggested structure:
-    def __init__(self):
-        self.vectors = None  # np.ndarray or None if the database is empty
-        self.metadata = []   # List of dicts containing chunk information
+    def add_chunks(self, chunks: List[Dict]) -> None:
+        self.vectors, self.metadata = add_to_vector_db(
+            chunks, self.vectors, self.metadata
+        )
 
-    def add_chunk(self, chunk_dict):
-        # Add a chunk to the database
+    def save(self) -> bool:
+        if self.vectors is None:
+            return True
+        return save_vector_db(self.vectors, self.metadata, self.db_path)
 
-    def save(self, path):
-        # Save vectors and metadata to disk
-
-    def load(self, path):
-        # Load vectors and metadata from disk
-
-    def get_size(self):
-        # Return the number of chunks in the database
-    """
-    # Start coding here
-    pass
-
-# ============================================================================
-# STEP 1: LOAD VECTOR DATABASE
-# ============================================================================
-
-def load_vector_db(db_path: str = None) -> Tuple[np.ndarray, List[Dict]]:
-    """
-    TODO: Load vector database from disk (if it exists)
-
-    Args:
-        db_path (str): Path to the directory containing the database
-                      Default: config.VECTOR_DB_PATH
-
-    Returns:
-        Tuple[np.ndarray, List[Dict]]: (vectors, metadata)
-        - vectors: np.ndarray shape (n_chunks, embedding_dim) or None if empty
-        - metadata: List[Dict] containing chunk information or [] if empty
-
-    Example:
-        vectors, metadata = load_vector_db()
-        print(vectors.shape)  # (150, 384)
-        print(len(metadata))  # 150
-
-    Suggested implementation:
-    - Use default value from config if db_path is None
-    - Check if the directory db_path exists
-    - Check if the files vectors.npy and metadata.json exist
-    - If both exist: Load vectors using np.load(), load metadata using json.load()
-    - If not exist: Return (None, [])
-    - Return tuple (vectors, metadata)
-
-    Note:
-    - Should handle exceptions if the file is corrupted
-    - Check if the sizes of vectors and metadata match
-    """
-    # Start coding here
-    pass
-
-# ============================================================================
-# STEP 2: SAVE VECTOR DATABASE
-# ============================================================================
-
-def save_vector_db(vectors: np.ndarray, metadata: List[Dict], db_path: str = None) -> bool:
-    """
-    TODO: Save vector database to disk
-
-    Args:
-        vectors (np.ndarray): Matrix vectors shape (n_chunks, embedding_dim)
-        metadata (List[Dict]): List of metadata corresponding
-        db_path (str): Path to the directory containing the database
-                      Default: config.VECTOR_DB_PATH
-
-    Returns:
-        bool: True if saved successfully, False if failed
-
-    Example:
-        success = save_vector_db(vectors, metadata)
-        if success:
-            print("Database saved successfully!")
-
-    Suggested implementation:
-    - Use default value from config if db_path is None
-    - Create the directory db_path if it doesn't exist (os.makedirs)
-    - Save vectors into file vectors.npy using np.save()
-    - Save metadata into file metadata.json using json.dump()
-    - Return True if successful
-    - Return False and print error message if failed
-
-    Note:
-    - Ensure vectors and metadata have compatible sizes
-    - Metadata that cannot be JSON serialized (like np.ndarray) needs to be handled
-    """
-    # Start coding here
-    pass
-
-# ============================================================================
-# STEP 3: ADD NEW CHUNKS TO DATABASE
-# ============================================================================
-
-def add_to_vector_db(chunks: List[Dict], vectors: np.ndarray = None, 
-                     metadata: List[Dict] = None) -> Tuple[np.ndarray, List[Dict]]:
-    """
-    TODO: Add new chunks to the vector database (or create a new one if empty)
-
-    Args:
-        chunks (List[Dict]): List of chunks to add
-                            Each chunk must have fields:
-                            - "embedding": np.ndarray
-                            - "text": str
-                            - "source": str
-                            - "file_name": str
-                            - ...other metadata fields
-        vectors (np.ndarray): Vectors currently in the database (None if empty)
-        metadata (List[Dict]): Metadata currently in the database ([] if empty)
-
-    Returns:
-        Tuple[np.ndarray, List[Dict]]: (updated_vectors, updated_metadata)
-
-    Example:
-        # First time
-        vectors, metadata = add_to_vector_db(chunks1, None, None)
-
-        # Again with new chunks
-        vectors, metadata = add_to_vector_db(chunks2, vectors, metadata)
-
-    Suggested implementation:
-    - If vectors is None: initialize vectors = np.array([chunk["embedding"] for chunk in chunks])
-    - If vectors is not None: concatenate vectors old and new
-      * Get embeddings from chunks: new_embeddings = np.array([chunk["embedding"] for chunk in chunks])
-      * Concatenate: vectors = np.vstack([vectors, new_embeddings])
-    - Prepare metadata new (remove field "embedding" if exists)
-    - Concatenate metadata old and new: metadata = metadata + new_metadata
-    - Return (vectors, metadata)
-
-    Note:
-    - Handle the case of empty chunks
-    - Ensure embeddings have compatible size with config.EMBEDDING_DIM
-    """
-    # Start coding here
-    pass
-
-# ============================================================================
-# STEP 4: RETRIEVE VECTOR DATABASE STATISTICS
-# ============================================================================
-
-def get_vector_db_stats(vectors: np.ndarray = None, metadata: List[Dict] = None) -> Dict:
-    """
-    TODO: Retrieve statistics about the vector database
-
-    Args:
-        vectors (np.ndarray): Vectors currently (optional, if None will load from disk)
-        metadata (List[Dict]): Metadata currently (optional, if None will load from disk)
-
-    Returns:
-        Dict: Statistics database in the form:
-        {
-            "total_chunks": 150,
-            "embedding_dim": 384,
-            "vector_shape": (150, 384),
-            "unique_files": 3,
-            "files": [
-                {"file_name": "file1.pdf", "chunk_count": 50},
-                {"file_name": "file2.pdf", "chunk_count": 60},
-                {"file_name": "file3.pdf", "chunk_count": 40}
-            ]
-        }
-
-    Example:
-        stats = get_vector_db_stats()
-        print(f"Total chunks: {stats['total_chunks']}")
-
-    Suggested implementation:
-    - If vectors is None, call load_vector_db() to load
-    - Count total chunks: len(metadata)
-    - Get embedding_dim from vectors.shape[1]
-    - Group chunks by file_name to count chunks per file
-    - Create dict containing information and return
-    """
-    # Start coding here
-    pass
+    def get_size(self) -> int:
+        return len(self.metadata)

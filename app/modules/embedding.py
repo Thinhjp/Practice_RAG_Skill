@@ -1,163 +1,116 @@
-"""
-=============================================================================
-MODULE: EMBEDDING.PY
-Purpose: Generate vector embeddings from text chunks
-=============================================================================
+"""Embedding backends used by the retrieval pipeline."""
 
-INSTRUCTIONS:
-1. Initialize the embedding model (SentenceTransformer)
-2. Create the function embed_text() to convert text into vectors
-3. Create the function embed_chunks() to generate embeddings for a list of chunks
-4. Create the function normalize_embeddings() to normalize vectors (optional)
-"""
+import hashlib
+import re
+from typing import Dict, List
 
-from typing import List, Dict
 import numpy as np
 
 from app.config import config
 
-# TODO: Import SentenceTransformer
-# from sentence_transformers import SentenceTransformer
+
+class HashingEmbedder:
+    """Small deterministic offline embedder for practice and automated tests."""
+
+    def __init__(self, dimension: int):
+        self.dimension = dimension
+
+    def _encode_one(self, text: str) -> np.ndarray:
+        vector = np.zeros(self.dimension, dtype=np.float32)
+        normalized = re.sub(r"\s+", " ", text.casefold()).strip()
+        tokens = re.findall(r"\w+", normalized, flags=re.UNICODE)
+        features = [*tokens, *(normalized[i : i + 3] for i in range(max(0, len(normalized) - 2)))]
+        for feature in features:
+            digest = hashlib.blake2b(feature.encode("utf-8"), digest_size=8).digest()
+            number = int.from_bytes(digest, "little")
+            index = number % self.dimension
+            vector[index] += 1.0 if number & 1 else -1.0
+        norm = np.linalg.norm(vector)
+        if norm:
+            vector /= norm
+        return vector
+
+    def encode(self, texts, **_: object) -> np.ndarray:
+        if isinstance(texts, str):
+            return self._encode_one(texts)
+        return np.vstack([self._encode_one(text) for text in texts]).astype(np.float32)
 
 
-# ============================================================================
-# STEP 1: INITIALIZE EMBEDDING MODEL
-# ============================================================================
+_embedding_model = None
+_embedding_signature: tuple[str, str, int] | None = None
 
-# TODO: Declare a global variable for the embedding model to enable lazy loading
-# embedding_model = None
 
 def initialize_embedder():
-    """
-    TODO: Initialize the embedding model (lazy loading)
+    """Lazily initialize the configured embedding backend."""
+    global _embedding_model, _embedding_signature
+    backend = config.EMBEDDING_BACKEND.strip().lower().replace("-", "_")
+    signature = (backend, config.EMBEDDING_MODEL, config.EMBEDDING_DIM)
+    if _embedding_model is not None and _embedding_signature == signature:
+        return _embedding_model
 
-    Implementation suggestion:
-    - Declare a global embedding_model
-    - Check if embedding_model is None
-    - Load the model using SentenceTransformer(config.EMBEDDING_MODEL)
-    - Optionally, add try-except to handle errors
+    if backend == "hashing":
+        model = HashingEmbedder(config.EMBEDDING_DIM)
+    elif backend == "sentence_transformers":
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "sentence-transformers is not installed. Install requirements.txt "
+                "or set EMBEDDING_BACKEND=hashing."
+            ) from exc
+        model = SentenceTransformer(config.EMBEDDING_MODEL)
+    else:
+        raise ValueError(
+            "EMBEDDING_BACKEND must be 'sentence_transformers' or 'hashing'"
+        )
 
-    Example:
-        global embedding_model
-        if embedding_model is None:
-            embedding_model = SentenceTransformer(config.EMBEDDING_MODEL)
-        return embedding_model
-    """
-    # Start coding here
-    pass
+    _embedding_model = model
+    _embedding_signature = signature
+    return model
 
-
-# ============================================================================
-# STEP 2: EMBED A SINGLE TEXT
-# ============================================================================
 
 def embed_text(text: str) -> np.ndarray:
-    """
-    TODO: Convert a text segment into an embedding vector
+    """Embed one non-empty text and return a normalized float32 vector."""
+    if not text or not text.strip():
+        raise ValueError("Text to embed cannot be empty")
+    model = initialize_embedder()
+    vector = np.asarray(
+        model.encode(text.strip(), convert_to_numpy=True), dtype=np.float32
+    ).reshape(-1)
+    if not np.isfinite(vector).all():
+        raise ValueError("Embedding contains non-finite values")
+    norm = np.linalg.norm(vector)
+    return vector / norm if norm else vector
 
-    Args:
-        text (str): Text to embed
-
-    Returns:
-        np.ndarray: Embedding vector (1D array)
-
-    Example:
-        text = "Hello, this is a text to embed"
-        vector = embed_text(text)
-        # Output: array([0.1234, -0.5678, 0.9012, ...]) with size EMBEDDING_DIM
-
-    Implementation suggestion:
-    - Call initialize_embedder() to get the model
-    - Use model.encode(text) to generate the embedding
-    - Optionally, convert to a numpy array
-    - Return the vector
-
-    Notes:
-    - Ensure the text is not empty; if empty, return a zero vector
-    - Handle errors if the text is too long
-    """
-    # Start coding here
-    pass
-
-
-# ============================================================================
-# STEP 3: EMBED A LIST OF CHUNKS
-# ============================================================================
 
 def embed_chunks(chunks: List[Dict]) -> List[Dict]:
-    """
-    TODO: Generate embeddings for all chunks in the list
+    """Embed chunks in one batch without mutating the caller's dictionaries."""
+    if not chunks:
+        return []
+    texts = [str(chunk.get("text", "")).strip() for chunk in chunks]
+    if any(not text for text in texts):
+        raise ValueError("Every chunk must contain non-empty text")
 
-    Args:
-        chunks (List[Dict]): List of chunks from the chunking module
-                            Each chunk has the format:
-                            {
-                                "chunk_id": 0,
-                                "text": "...",
-                                "source": "...",
-                                "file_name": "..."
-                            }
+    model = initialize_embedder()
+    vectors = np.asarray(
+        model.encode(texts, convert_to_numpy=True), dtype=np.float32
+    )
+    if vectors.ndim == 1:
+        vectors = vectors.reshape(1, -1)
+    if len(vectors) != len(chunks) or not np.isfinite(vectors).all():
+        raise ValueError("Embedding backend returned an invalid matrix")
 
-    Returns:
-        List[Dict]: List of chunks with an additional "embedding" field
-                   {
-                       "chunk_id": 0,
-                       "text": "...",
-                       "source": "...",
-                       "file_name": "...",
-                       "embedding": [0.1234, -0.5678, ...]  # numpy array
-                   }
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    normalized = np.divide(vectors, norms, out=np.zeros_like(vectors), where=norms != 0)
+    return [{**chunk, "embedding": vector} for chunk, vector in zip(chunks, normalized)]
 
-    Example:
-        chunks = [
-            {"chunk_id": 0, "text": "Text 1", "source": "file.pdf", "file_name": "file.pdf"},
-            {"chunk_id": 1, "text": "Text 2", "source": "file.pdf", "file_name": "file.pdf"}
-        ]
-        result = embed_chunks(chunks)
-        # result[0]["embedding"] will be the vector for "Text 1"
-
-    Implementation suggestion:
-    - Extract the list of texts from chunks (extract "text" field)
-    - Use SentenceTransformer.encode() with the list for batch processing
-    - Iterate over chunks and embeddings to assign embeddings to each chunk
-    - Return chunks with the additional "embedding" field
-
-    Notes:
-    - Batch processing is faster than looping
-    - Optionally, use convert_to_numpy=True in encode()
-    """
-    # Start coding here
-    pass
-
-
-# ============================================================================
-# STEP 4: NORMALIZE EMBEDDINGS (OPTIONAL)
-# ============================================================================
 
 def normalize_embeddings(chunks: List[Dict]) -> List[Dict]:
-    """
-    TODO: Normalize embedding vectors (L2 normalization) - optional
-
-    Args:
-        chunks (List[Dict]): List of chunks with embeddings
-
-    Returns:
-        List[Dict]: List of chunks with normalized embeddings
-
-    Example:
-        Normalization helps cosine similarity calculations as it becomes
-        equivalent to the dot product of two normalized vectors.
-
-    Implementation suggestion:
-    - Iterate over chunks
-    - Retrieve the embedding of each chunk
-    - Compute the L2 norm: norm = sqrt(sum(x^2))
-    - Divide each element by the norm
-    - Update the embedding in the chunk
-
-    Formula for L2 normalization:
-        x_normalized = x / ||x||
-        In numpy: x / np.linalg.norm(x)
-    """
-    # Start coding here
-    pass
+    result = []
+    for chunk in chunks:
+        if "embedding" not in chunk:
+            raise ValueError("Chunk is missing its embedding")
+        vector = np.asarray(chunk["embedding"], dtype=np.float32)
+        norm = np.linalg.norm(vector)
+        result.append({**chunk, "embedding": vector / norm if norm else vector})
+    return result

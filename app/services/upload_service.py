@@ -1,77 +1,31 @@
-"""
-=============================================================================
-MODULE: UPLOAD_SERVICE.PY
-Purpose: Business logic for file upload functionality
-=============================================================================
+"""Business workflow for ingesting a file into the vector store."""
 
-UploadService handles:
-1. File upload
-2. Extracting text from files
-3. Creating chunks
-4. Generating embeddings
-5. Saving to the database
-"""
+from pathlib import Path
 
-from typing import Tuple
-from fastapi import UploadFile, HTTPException
+from fastapi import HTTPException, UploadFile
 
-from app.modules import data_ingestion, chunking, embedding, vector_db
+from app.modules import chunking, data_ingestion, embedding, vector_db
 
 
 class UploadService:
-    """
-    TODO: Create the UploadService class to manage the entire upload process
-
-    Methods:
-    - process_and_save_file(): Process uploaded file and save to the database
-
-    Example usage:
-        service = UploadService()
-        result = await service.process_and_save_file(file)
-    """
-
     @staticmethod
     async def process_and_save_file(upload_file: UploadFile) -> dict:
-        """
-        TODO: Process the entire file upload workflow
-
-        Args:
-            upload_file (UploadFile): File uploaded via HTTP request
-
-        Returns:
-            dict: Upload result including:
-            {
-                "file_name": "document.pdf",
-                "chunks_count": 150,
-                "message": "Successfully uploaded..."
-            }
-
-        Raises:
-            HTTPException: If an error occurs during processing
-
-        Process:
-        1. Validate & save the file (data_ingestion.process_uploaded_file)
-        2. Split into chunks (chunking.prepare_chunks)
-        3. Generate embeddings (embedding.embed_chunks)
-        4. Save to the database (vector_db.add_to_vector_db, save_vector_db)
-        5. Return the result
-
-        Implementation suggestion:
+        original_name = Path(upload_file.filename or "").name
         try:
-            file_path, text = data_ingestion.process_uploaded_file(upload_file)
-            chunks = chunking.prepare_chunks(text, file_path, upload_file.filename)
-            chunks_with_emb = embedding.embed_chunks(chunks)
-            vectors, metadata = vector_db.load_vector_db()
-            vectors, metadata = vector_db.add_to_vector_db(chunks_with_emb, vectors, metadata)
-            vector_db.save_vector_db(vectors, metadata)
-
+            file_path, text = await data_ingestion.process_uploaded_file(upload_file)
+            chunks = chunking.prepare_chunks(
+                text, file_path, original_name, method="sentence"
+            )
+            if not chunks:
+                raise ValueError("The document did not produce any chunks")
+            embedded_chunks = embedding.embed_chunks(chunks)
+            vector_db.append_chunks(embedded_chunks)
             return {
-                "file_name": upload_file.filename,
+                "file_name": original_name,
                 "chunks_count": len(chunks),
-                "message": f"Successfully uploaded {upload_file.filename}..."
+                "message": f"Successfully uploaded {original_name} with {len(chunks)} chunks",
             }
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        """
-        # Start coding here
-        pass
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(400, f"Upload failed: {exc}") from exc

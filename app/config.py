@@ -69,7 +69,14 @@ class Config:
     
     # Embedding model used
     # TODO: Change to a different model if needed (all-MiniLM-L6-v2, text-embedding-3-small...)
-    EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+    EMBEDDING_MODEL = os.getenv(
+        "EMBEDDING_MODEL",
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )
+
+    # "sentence_transformers" provides semantic multilingual embeddings.
+    # "hashing" is deterministic, local and useful for fast/offline practice.
+    EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "hashing")
     
     # ========================================================================
     # VECTOR DATABASE CONFIGURATION
@@ -93,10 +100,14 @@ class Config:
     
     # Minimum similarity threshold to return results
     # TODO: Adjust to filter out irrelevant results
-    SIMILARITY_THRESHOLD = 0.5
+    SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.3"))
     
     # Metric to measure similarity (cosine or euclidean)
     SIMILARITY_METRIC = "cosine"
+
+    # Runnable baseline. Replace AnswerService's extractive generator with an
+    # LLM provider when API credentials are available.
+    GENERATION_BACKEND = os.getenv("GENERATION_BACKEND", "extractive")
 
 
 # ============================================================================

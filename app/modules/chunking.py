@@ -1,193 +1,129 @@
-"""
-=============================================================================
-MODULE: CHUNKING.PY
-Purpose: Split text into smaller overlapping chunks to prepare for embedding
-=============================================================================
+"""Text chunking strategies and chunk metadata."""
 
-INSTRUCTIONS:
-1. Create the function split_text_simple() to split text by character count
-2. Create the function split_text_by_sentences() to split by sentences (smarter)
-3. Create the function split_text_by_paragraphs() to split by paragraphs
-4. Create the function add_chunk_metadata() to add metadata to each chunk
-5. Create the function prepare_chunks() to combine the above functions
-"""
-
-from typing import List, Dict
 import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List
+from uuid import NAMESPACE_URL, uuid5
 
 from app.config import config
 
 
-# ============================================================================
-# STEP 1: SIMPLE TEXT SPLITTING (BY CHARACTER COUNT)
-# ============================================================================
+def _settings(chunk_size: int | None, overlap: int | None) -> tuple[int, int]:
+    size = config.CHUNK_SIZE if chunk_size is None else chunk_size
+    shared = config.CHUNK_OVERLAP if overlap is None else overlap
+    if size <= 0:
+        raise ValueError("chunk_size must be greater than 0")
+    if shared < 0 or shared >= size:
+        raise ValueError("overlap must satisfy 0 <= overlap < chunk_size")
+    return size, shared
 
-def split_text_simple(text: str, chunk_size: int = None, overlap: int = None) -> List[str]:
-    """
-    TODO: Split text into chunks based on character count + overlap
 
-    Args:
-        text (str): Text to split
-        chunk_size (int): Size of each chunk (default from config)
-        overlap (int): Overlap size (default from config)
+def split_text_simple(
+    text: str, chunk_size: int | None = None, overlap: int | None = None
+) -> List[str]:
+    size, shared = _settings(chunk_size, overlap)
+    cleaned = text.strip()
+    if not cleaned:
+        return []
+    step = size - shared
+    chunks = []
+    start = 0
+    while start < len(cleaned):
+        end = min(start + size, len(cleaned))
+        chunks.append(cleaned[start:end].strip())
+        if end == len(cleaned):
+            break
+        start += step
+    return chunks
 
-    Returns:
-        List[str]: List of chunks
 
-    Example:
-        text = "This is a very long text..."
-        chunks = split_text_simple(text, chunk_size=100, overlap=20)
-        # Output: ["This is a very long text...", "very long text..."]
+def _pack_segments(
+    segments: List[str], separator: str, chunk_size: int, overlap: int
+) -> List[str]:
+    """Pack complete segments and preserve complete trailing segments as overlap."""
+    expanded: List[str] = []
+    for segment in segments:
+        segment = segment.strip()
+        if not segment:
+            continue
+        if len(segment) <= chunk_size:
+            expanded.append(segment)
+        else:
+            expanded.extend(split_text_simple(segment, chunk_size, overlap))
 
-    Implementation suggestion:
-    - Use default values from config if parameters are not provided
-    - Loop from 0 to len(text) with steps of (chunk_size - overlap)
-    - Extract substrings from the current position to position + chunk_size
-    - Add to the list
-    - Filter out chunks that are too short (< 50 characters)
-    """
-    # Start coding here
-    pass
+    chunks: List[str] = []
+    current: List[str] = []
+    for segment in expanded:
+        candidate = separator.join([*current, segment])
+        if current and len(candidate) > chunk_size:
+            chunks.append(separator.join(current))
+            carry: List[str] = []
+            carry_length = 0
+            for previous in reversed(current):
+                added = len(previous) + (len(separator) if carry else 0)
+                if carry_length + added > overlap:
+                    break
+                carry.insert(0, previous)
+                carry_length += added
+            current = carry
+            if current and len(separator.join([*current, segment])) > chunk_size:
+                current = []
+        current.append(segment)
+    if current:
+        final = separator.join(current)
+        if not chunks or final != chunks[-1]:
+            chunks.append(final)
+    return chunks
 
-# ============================================================================
-# STEP 2: SMART TEXT SPLITTING (BY SENTENCES)
-# ============================================================================
 
-def split_text_by_sentences(text: str, chunk_size: int = None, overlap: int = None) -> List[str]:
-    """
-    TODO: Split text by sentences to ensure no sentence is cut off
+def split_text_by_sentences(
+    text: str, chunk_size: int | None = None, overlap: int | None = None
+) -> List[str]:
+    size, shared = _settings(chunk_size, overlap)
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    return _pack_segments(sentences, " ", size, shared)
 
-    Args:
-        text (str): Text to split
-        chunk_size (int): Size of each chunk (default from config)
-        overlap (int): Overlap size (default from config)
 
-    Returns:
-        List[str]: List of chunks
+def split_text_by_paragraphs(
+    text: str, chunk_size: int | None = None, overlap: int | None = None
+) -> List[str]:
+    size, shared = _settings(chunk_size, overlap)
+    paragraphs = re.split(r"\n\s*\n", text.strip())
+    return _pack_segments(paragraphs, "\n\n", size, shared)
 
-    Example:
-        text = "This is sentence 1. This is sentence 2. This is sentence 3."
-        chunks = split_text_by_sentences(text, chunk_size=50)
-        # Output: ["This is sentence 1. This is sentence 2.", "This is sentence 2. This is sentence 3."]
-
-    Implementation suggestion:
-    - Split text into sentences using regex or split('.')
-    - Loop to combine sentences so that each chunk does not exceed chunk_size
-    - Handle overlap by saving a few sentences from the previous chunk
-    - Return the list of chunks
-
-    Suggested regex: r'[.!?]+' to split sentences
-    """
-    # Start coding here
-    pass
-
-# ============================================================================
-# STEP 3: SPLIT TEXT BY PARAGRAPHS
-# ============================================================================
-
-def split_text_by_paragraphs(text: str, chunk_size: int = None, overlap: int = None) -> List[str]:
-    """
-    TODO: Split text by paragraphs to maintain better context
-
-    Args:
-        text (str): Text to split
-        chunk_size (int): Size of each chunk (default from config)
-        overlap (int): Overlap size (default from config)
-
-    Returns:
-        List[str]: List of chunks
-
-    Example:
-        text = "Paragraph 1\n\nParagraph 2\n\nParagraph 3"
-        chunks = split_text_by_paragraphs(text, chunk_size=100)
-
-    Implementation suggestion:
-    - Split text using '\n\n' to separate paragraphs
-    - Similar to split_text_by_sentences but use paragraphs
-    - Combine paragraphs so that each chunk does not exceed chunk_size
-    """
-    # Start coding here
-    pass
-
-# ============================================================================
-# STEP 4: ADD METADATA TO EACH CHUNK
-# ============================================================================
 
 def add_chunk_metadata(chunks: List[str], source: str, file_name: str) -> List[Dict]:
-    """
-    TODO: Add metadata to each chunk (chunk_id, source, ...)
-
-    Args:
-        chunks (List[str]): List of chunks
-        source (str): Data source (file path)
-        file_name (str): File name
-
-    Returns:
-        List[Dict]: List of dictionaries containing chunks and metadata
-
-    Example output:
-        [
+    document_id = uuid5(NAMESPACE_URL, str(Path(source).resolve())).hex
+    created_at = datetime.now(timezone.utc).isoformat()
+    result = []
+    for index, text in enumerate(chunks):
+        chunk_uuid = uuid5(NAMESPACE_URL, f"{document_id}:{index}")
+        result.append(
             {
-                "chunk_id": 0,
-                "text": "Chunk content 1...",
-                "source": "./data/uploads/file.pdf",
-                "file_name": "file.pdf",
-                "length": 150
-            },
-            {
-                "chunk_id": 1,
-                "text": "Chunk content 2...",
-                "source": "./data/uploads/file.pdf",
-                "file_name": "file.pdf",
-                "length": 145
+                "chunk_id": chunk_uuid.int,
+                "document_id": document_id,
+                "chunk_index": index,
+                "text": text,
+                "source": source,
+                "file_name": Path(file_name).name,
+                "length": len(text),
+                "created_at": created_at,
             }
-        ]
+        )
+    return result
 
-    Implementation suggestion:
-    - Loop through chunks with enumerate to get the index
-    - Create a dictionary for each chunk with information: chunk_id, text, source, file_name
-    - Add other useful information (length, created_at...)
-    - Return the list of dictionaries
-    """
-    # Start coding here
-    pass
 
-# ============================================================================
-# STEP 5: COMBINE - PREPARE CHUNKS
-# ============================================================================
-
-def prepare_chunks(text: str, source: str, file_name: str, method: str = "simple") -> List[Dict]:
-    """
-    TODO: Combine the above functions to prepare all chunks
-
-    Args:
-        text (str): Text to process
-        source (str): File path (source)
-        file_name (str): File name
-        method (str): Text splitting method ("simple", "sentence", "paragraph")
-                     default: "simple"
-
-    Returns:
-        List[Dict]: List of chunks with metadata
-
-    Process:
-    1. Choose the text splitting method based on the 'method' parameter
-    2. Split text into chunks
-    3. Add metadata to each chunk
-    4. Return the list of chunks
-
-    Suggested code:
-    if method == "simple":
-        chunks = split_text_simple(text)
-    elif method == "sentence":
-        chunks = split_text_by_sentences(text)
-    elif method == "paragraph":
-        chunks = split_text_by_paragraphs(text)
-    else:
-        raise ValueError("Invalid method")
-
-    chunks_with_metadata = add_chunk_metadata(chunks, source, file_name)
-    return chunks_with_metadata
-    """
-    # Start coding here
-    pass
+def prepare_chunks(
+    text: str, source: str, file_name: str, method: str = "sentence"
+) -> List[Dict]:
+    methods = {
+        "simple": split_text_simple,
+        "sentence": split_text_by_sentences,
+        "paragraph": split_text_by_paragraphs,
+    }
+    try:
+        chunks = methods[method.lower()](text)
+    except KeyError as exc:
+        raise ValueError(f"Unknown chunking method: {method}") from exc
+    return add_chunk_metadata(chunks, source, file_name)

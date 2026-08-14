@@ -18,8 +18,11 @@ Benefits:
 ✓ Clear separation of concerns
 """
 
+from pathlib import Path
+
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import config
 from app.routes import (
@@ -29,7 +32,8 @@ from app.routes import (
     health_router,
     test_router,
     chunks_router,
-    embeddings_router
+    embeddings_router,
+    answer_router
 )
 
 
@@ -44,6 +48,9 @@ app = FastAPI(
     docs_url="/api/docs",
     openapi_url="/api/openapi.json"
 )
+
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 # ============================================================================
@@ -73,6 +80,7 @@ app.include_router(health_router)
 app.include_router(test_router)
 app.include_router(chunks_router)
 app.include_router(embeddings_router)
+app.include_router(answer_router)
 
 
 # ============================================================================
@@ -81,23 +89,7 @@ app.include_router(embeddings_router)
 
 @app.get("/")
 async def root():
-    """
-    TODO: Root endpoint - return API information
-    
-    Hint:
-    return {
-        "app": config.APP_NAME,
-        "version": config.API_VERSION,
-        "docs": "/api/docs"
-    }
-    """
-    # Start code here
-    return {
-        "app": config.APP_NAME,
-        "version": config.API_VERSION,
-        "docs": "/api/docs",
-        "health": "/api/v1/health"
-    }
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 
