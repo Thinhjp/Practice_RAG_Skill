@@ -19,6 +19,10 @@ class SearchResult(BaseModel):
 class UploadResponse(BaseModel):
     file_name: str
     chunks_count: int = Field(ge=0)
+    ingestion_route: str
+    detected_mime: str
+    normalized_html_path: Optional[str] = None
+    cached_conversion: bool = False
     message: str
 
 

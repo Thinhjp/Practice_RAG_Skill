@@ -3,7 +3,7 @@
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 from uuid import NAMESPACE_URL, uuid5
 
 from app.config import config
@@ -93,29 +93,43 @@ def split_text_by_paragraphs(
     return _pack_segments(paragraphs, "\n\n", size, shared)
 
 
-def add_chunk_metadata(chunks: List[str], source: str, file_name: str) -> List[Dict]:
-    document_id = uuid5(NAMESPACE_URL, str(Path(source).resolve())).hex
+def add_chunk_metadata(
+    chunks: List[str],
+    source: str,
+    file_name: str,
+    *,
+    document_id: str | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> List[Dict]:
+    document_id = document_id or uuid5(NAMESPACE_URL, str(Path(source).resolve())).hex
     created_at = datetime.now(timezone.utc).isoformat()
     result = []
     for index, text in enumerate(chunks):
         chunk_uuid = uuid5(NAMESPACE_URL, f"{document_id}:{index}")
-        result.append(
-            {
-                "chunk_id": chunk_uuid.int,
-                "document_id": document_id,
-                "chunk_index": index,
-                "text": text,
-                "source": source,
-                "file_name": Path(file_name).name,
-                "length": len(text),
-                "created_at": created_at,
-            }
-        )
+        item = {
+            "chunk_id": chunk_uuid.int,
+            "document_id": document_id,
+            "chunk_index": index,
+            "text": text,
+            "source": source,
+            "file_name": Path(file_name).name,
+            "length": len(text),
+            "created_at": created_at,
+        }
+        if extra_metadata:
+            item.update(extra_metadata)
+        result.append(item)
     return result
 
 
 def prepare_chunks(
-    text: str, source: str, file_name: str, method: str = "sentence"
+    text: str,
+    source: str,
+    file_name: str,
+    method: str = "sentence",
+    *,
+    document_id: str | None = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> List[Dict]:
     methods = {
         "simple": split_text_simple,
@@ -126,4 +140,10 @@ def prepare_chunks(
         chunks = methods[method.lower()](text)
     except KeyError as exc:
         raise ValueError(f"Unknown chunking method: {method}") from exc
-    return add_chunk_metadata(chunks, source, file_name)
+    return add_chunk_metadata(
+        chunks,
+        source,
+        file_name,
+        document_id=document_id,
+        extra_metadata=extra_metadata,
+    )

@@ -1,7 +1,6 @@
-"""Upload validation, persistence, and text extraction."""
+"""Upload persistence plus native/visual document routing."""
 
 from pathlib import Path
-from typing import Tuple
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
@@ -9,6 +8,11 @@ from pypdf import PdfReader
 from docx import Document
 
 from app.config import config
+from app.modules.file_inspection import inspect_file
+from app.modules.gemini_converter import GeminiHtmlConverter
+from app.modules.html_processing import html_to_text
+from app.modules.native_extraction import TEXT_EXTENSIONS, extract_native
+from app.schemas.ingestion_models import IngestionRoute, PreparedDocument
 
 
 def validate_file(filename: str) -> bool:
@@ -88,21 +92,42 @@ async def save_uploaded_file(upload_file: UploadFile) -> str:
     return str(destination)
 
 
-async def process_uploaded_file(upload_file: UploadFile) -> Tuple[str, str]:
-    """Save an upload and extract its textual content."""
+async def process_uploaded_file(upload_file: UploadFile) -> PreparedDocument:
+    """Save, inspect, classify, and normalize an uploaded document."""
+    original_name = Path(upload_file.filename or "").name
     file_path = await save_uploaded_file(upload_file)
-    extension = Path(file_path).suffix.lower()
-
     try:
-        extractors = {
-            ".pdf": extract_text_from_pdf,
-            ".txt": extract_text_from_txt,
-            ".docx": extract_text_from_docx,
-        }
-        text = extractors[extension](file_path)
-        if not text.strip():
-            raise ValueError("No text could be extracted from the file")
-        return file_path, text
+        inspection = inspect_file(file_path, original_name)
+        extraction = extract_native(inspection)
+        if extraction.acceptable:
+            return PreparedDocument(
+                inspection=inspection,
+                route=IngestionRoute.DIRECT_TEXT,
+                text=extraction.text,
+                extractor=extraction.extractor,
+                warnings=extraction.warnings,
+            )
+        if inspection.extension in TEXT_EXTENSIONS:
+            raise ValueError("No readable text could be extracted from the file")
+
+        route = (
+            IngestionRoute.HYBRID_HTML
+            if extraction.has_partial_pages
+            else IngestionRoute.GEMINI_HTML
+        )
+        conversion = await GeminiHtmlConverter().convert(inspection)
+        return PreparedDocument(
+            inspection=inspection,
+            route=route,
+            text=html_to_text(conversion.html),
+            html=conversion.html,
+            extractor="gemini",
+            normalized_html_path=conversion.artifact_path,
+            converter_model=conversion.model,
+            prompt_version=conversion.prompt_version,
+            cached_conversion=conversion.cached,
+            warnings=extraction.warnings,
+        )
     except Exception as exc:
         Path(file_path).unlink(missing_ok=True)
         if isinstance(exc, HTTPException):

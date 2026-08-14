@@ -133,6 +133,7 @@ dmypy.json
 *.npz
 data/uploads/
 data/vector_db/
+data/normalized/
 
 # Vector database files
 *.faiss

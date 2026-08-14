@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ingest Uploaded Document"
+  short_description: "Classify, normalize, and chunk uploaded files"
+  default_prompt: "Use $ingest-uploaded-document to classify and ingest an uploaded document for RAG."

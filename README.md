@@ -58,6 +58,30 @@ API docs: <http://127.0.0.1:8000/api/docs>
 python -m pytest -q
 ```
 
+## Gemini document conversion
+
+Native text is extracted locally from text, PDF, DOCX, XLSX and PPTX files. Images,
+scanned PDFs, and low-quality document extractions are converted to sanitized HTML
+with Gemini before structure-aware chunking.
+
+Create a free Gemini API key in Google AI Studio and add it to `.env`:
+
+```dotenv
+GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-3.5-flash-lite
+```
+
+The key is required only for the `gemini_html` and `hybrid_html` routes. HTML artifacts
+are cached in `data/normalized/`. Install LibreOffice and make `soffice` available on
+`PATH` if DOCX, XLSX or PPTX files must fall back to visual conversion.
+
+Run the opt-in free-tier smoke test after configuring the key:
+
+```powershell
+$env:RUN_GEMINI_LIVE="1"
+python -m pytest -q -m live
+```
+
 ## API chính
 
 - `POST /api/v1/upload`

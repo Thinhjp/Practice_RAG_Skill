@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.modules.gemini_converter import GeminiHtmlConverter
+from app.schemas.ingestion_models import ConversionResult
 
 
 client = TestClient(app)
@@ -64,3 +66,30 @@ def test_rejects_unsupported_and_empty_files():
         "/api/v1/upload", files={"file": ("empty.txt", b"", "text/plain")}
     )
     assert empty.status_code == 400
+
+
+def test_visual_upload_uses_gemini_html_route(monkeypatch, tmp_path):
+    async def fake_convert(self, inspection):
+        artifact = tmp_path / "normalized.html"
+        html = (
+            '<article><section data-page="1"><h1>Receipt</h1>'
+            '<p>Total amount is 120,000 VND.</p></section></article>'
+        )
+        artifact.write_text(html, encoding="utf-8")
+        return ConversionResult(
+            html=html,
+            artifact_path=str(artifact),
+            model="gemini-test",
+            prompt_version="test-v1",
+        )
+
+    monkeypatch.setattr(GeminiHtmlConverter, "convert", fake_convert)
+    response = client.post(
+        "/api/v1/upload",
+        files={"file": ("receipt.png", b"\x89PNG\r\n\x1a\nmock", "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ingestion_route"] == "gemini_html"
+    assert payload["detected_mime"] == "image/png"
+    assert payload["chunks_count"] >= 1

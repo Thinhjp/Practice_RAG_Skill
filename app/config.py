@@ -44,8 +44,37 @@ class Config:
     # Maximum file size (bytes) - 50MB
     MAX_FILE_SIZE = 50 * 1024 * 1024
     
-    # Allowed file formats for upload
-    ALLOWED_FILE_TYPES = [".pdf", ".txt", ".docx"]
+    # Allowed file formats. The actual format is verified from the file bytes;
+    # the extension is only the first upload gate.
+    ALLOWED_FILE_TYPES = [
+        ".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm",
+        ".pdf", ".docx", ".xlsx", ".pptx",
+        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff",
+    ]
+
+    # Canonical HTML produced by Gemini is cached here.
+    NORMALIZED_DIR = os.getenv("NORMALIZED_DIR", "./data/normalized")
+
+    # Local extraction quality. Text-oriented formats only need non-empty text;
+    # document formats use these thresholds before an LLM fallback is selected.
+    MIN_NATIVE_TEXT_CHARS = int(os.getenv("MIN_NATIVE_TEXT_CHARS", "80"))
+    MIN_PAGE_TEXT_CHARS = int(os.getenv("MIN_PAGE_TEXT_CHARS", "40"))
+    MIN_TEXT_PAGE_COVERAGE = float(os.getenv("MIN_TEXT_PAGE_COVERAGE", "0.7"))
+    MIN_PRINTABLE_RATIO = float(os.getenv("MIN_PRINTABLE_RATIO", "0.85"))
+
+    # Gemini Interactions API. gemini-3.5-flash-lite currently has a free tier
+    # and is optimized for high-volume document extraction.
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    GEMINI_API_URL = os.getenv(
+        "GEMINI_API_URL",
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+    )
+    GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "90"))
+    GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "2"))
+    GEMINI_INLINE_MAX_BYTES = int(
+        os.getenv("GEMINI_INLINE_MAX_BYTES", str(20 * 1024 * 1024))
+    )
     
     # ========================================================================
     # CHUNKING CONFIGURATION (TEXT SPLITTING)
